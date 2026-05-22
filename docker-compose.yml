@@ -1,0 +1,21 @@
+services:
+  arrows-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arrows-frontend:latest
+    container_name: arrows-frontend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.prod
+    volumes:
+      # Update SUPERSET_SESSION_COOKIE without rebuilding the image
+      - ./.env.prod:/etc/arrows/env.prod:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

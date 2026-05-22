@@ -1,0 +1,97 @@
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Arrows_back API (Superset /api/v1 locations are more specific)
+    location /api/ {
+        proxy_pass ${BACKEND_UPSTREAM}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /internal/superset/guest-token {
+        proxy_pass http://127.0.0.1:3099;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+    }
+
+    location = /api/v1/me/roles/ {
+        proxy_pass http://127.0.0.1:3099;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+    }
+
+    location = /static/service-worker.js {
+        proxy_pass http://127.0.0.1:3099;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+    }
+
+    # Superset embed proxy — Host must match the browser origin (like Vite hostRewrite)
+    location /api/v1/ {
+        proxy_pass ${SUPERSET_UPSTREAM}/api/v1/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        include /etc/nginx/snippets/superset-cookie.conf;
+        proxy_redirect off;
+    }
+
+    location /static/ {
+        proxy_pass ${SUPERSET_UPSTREAM}/static/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        include /etc/nginx/snippets/superset-cookie.conf;
+    }
+
+    location /superset/ {
+        proxy_pass ${SUPERSET_UPSTREAM}/superset/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        include /etc/nginx/snippets/superset-cookie.conf;
+    }
+
+    # Embedded dashboards use guest JWT via postMessage — do not send admin session cookie
+    location /embedded/ {
+        proxy_pass ${SUPERSET_UPSTREAM}/embedded/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_redirect off;
+    }
+
+    location /login/ {
+        proxy_pass ${SUPERSET_UPSTREAM}/login/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        include /etc/nginx/snippets/superset-cookie.conf;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /health {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok";
+    }
+}

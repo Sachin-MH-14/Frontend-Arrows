@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+*.log
+.env*
+!.env.prod
+!.env.prod.example
+!docker-entrypoint.sh
+!nginx.conf.template
+!scripts/superset-guest-token-server.mjs
