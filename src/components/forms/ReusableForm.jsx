@@ -110,6 +110,177 @@ const uniqueValues = (items) => [...new Set(items.filter(Boolean))];
 
 const mergeUnique = (existing, incoming) => uniqueValues([...toArray(existing), ...toArray(incoming)]);
 
+const isEmptyValue = (value) => {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'string') return normalizeText(value) === '';
+  return false;
+};
+
+const normalizeAliasToken = (value) =>
+  normalizeToken(
+    String(value || '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/[^a-zA-Z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+
+const cleanExtractedValue = (value) =>
+  normalizeText(String(value || '').replace(/^['"`]+|['"`,]+$/g, '').trim());
+
+const tryParseJsonBlock = (text) => {
+  if (!text) return null;
+
+  const trimmed = String(text).trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+};
+
+const extractJsonObjectsFromText = (text) => {
+  const raw = String(text || '');
+  if (!raw) return [];
+
+  const parsedObjects = [];
+  let depth = 0;
+  let startIndex = -1;
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === '{') {
+      if (depth === 0) {
+        startIndex = i;
+      }
+      depth += 1;
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth -= 1;
+      }
+
+      if (depth === 0 && startIndex >= 0) {
+        const candidate = raw.slice(startIndex, i + 1);
+        const parsed = tryParseJsonBlock(candidate);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          parsedObjects.push(parsed);
+        }
+        startIndex = -1;
+      }
+    }
+  }
+
+  return parsedObjects;
+};
+
+const splitFieldNameIntoWords = (name) =>
+  String(name || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const normalizeDateToIso = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const slashOrDash = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (slashOrDash) {
+    const day = Number.parseInt(slashOrDash[1], 10);
+    const month = Number.parseInt(slashOrDash[2], 10);
+    let year = Number.parseInt(slashOrDash[3], 10);
+    if (year < 100) year += 2000;
+
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  const parsedDate = new Date(raw);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return '';
+  }
+
+  const yyyy = parsedDate.getFullYear();
+  const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(parsedDate.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const coerceFieldValue = (field, rawValue, combinedNormalizedText) => {
+  const type = String(field?.type || '').toLowerCase();
+  const normalizedRawValue = normalizeText(rawValue);
+  if (!normalizedRawValue) return '';
+
+  if (type === 'select') {
+    return findMatchingOptionValue(normalizedRawValue, field?.options || []);
+  }
+
+  if (type === 'multiselect') {
+    return collectMatchingOptionValues(
+      normalizeToken(`${combinedNormalizedText} ${normalizedRawValue}`),
+      field?.options || []
+    );
+  }
+
+  if (type === 'number') {
+    const matched = normalizedRawValue.match(/\d+(?:\.\d+)?/);
+    return matched?.[0] || '';
+  }
+
+  if (type === 'email') {
+    return normalizedRawValue.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
+  }
+
+  if (type === 'date') {
+    return normalizeDateToIso(normalizedRawValue);
+  }
+
+  return normalizedRawValue;
+};
+
+const FIELD_ALIAS_MAP = {
+  positionName: ['job name', 'job title', 'position name', 'role', 'designation'],
+  clientName: ['client name', 'customer name'],
+  clientId: ['client id', 'customer id'],
+  contactPersonName: ['contact person', 'contact name'],
+  contactPersonEmail: ['contact email', 'email id', 'mail id'],
+  noOfPositions: ['openings', 'positions', 'number of positions', 'no of positions'],
+  minExperience: ['minimum experience', 'min experience', 'experience min'],
+  maxExperience: ['maximum experience', 'max experience', 'experience max'],
+  minSalary: ['minimum salary', 'min salary', 'salary min', 'minimum ctc', 'min ctc'],
+  maxSalary: ['maximum salary', 'max salary', 'salary max', 'maximum ctc', 'max ctc'],
+  jobType: ['job type', 'employment type'],
+  hiringType: ['work type', 'mode of work', 'work mode'],
+  location: ['location', 'job location'],
+  positionLevel: ['position level', 'seniority level'],
+  technicalSkills: ['technical skills', 'primary skills', 'mandatory skills'],
+  softSkills: ['soft skills', 'behavioral skills'],
+  additionalSkills: ['additional skills', 'other skills'],
+  targetDate: ['target', 'target date', 'joining target date'],
+  jobActivationDate: ['job activation date', 'validity upto', 'validity up to', 'validity date']
+};
+
+const buildFieldAliases = (field) => {
+  const aliases = [];
+  const normalizedName = normalizeAliasToken(splitFieldNameIntoWords(field?.name));
+  const normalizedLabel = normalizeAliasToken(String(field?.label || '').replace('*', ''));
+  const mappedAliases = FIELD_ALIAS_MAP[field?.name] || [];
+
+  if (normalizedName) aliases.push(normalizedName);
+  if (normalizedLabel) aliases.push(normalizedLabel);
+  mappedAliases.forEach((alias) => {
+    const normalizedAlias = normalizeAliasToken(alias);
+    if (normalizedAlias) aliases.push(normalizedAlias);
+  });
+
+  return uniqueValues(aliases);
+};
+
 const SUPPORTED_JD_TEXT_EXTENSIONS = new Set(['pdf', 'docx', 'txt']);
 
 const findMatchingOptionValue = (text, options = []) => {
@@ -144,7 +315,7 @@ const readDocxText = async (file) => {
   const mammoth = await import('mammoth/mammoth.browser');
   const arrayBuffer = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer });
-  return normalizeText(result?.value || '');
+  return String(result?.value || '').replace(/\u00A0/g, ' ');
 };
 
 const readPdfText = async (file) => {
@@ -166,8 +337,7 @@ const readPdfText = async (file) => {
     pageTexts.push(pageText);
   }
 
-  const extractedText = normalizeText(pageTexts.join('\n'));
-  return extractedText;
+  return pageTexts.join('\n');
 };
 
 const getUploadedFileExtension = (file) => String(file?.name || '').split('.').pop()?.toLowerCase() || '';
@@ -196,7 +366,7 @@ const readUploadedFileText = async (file) => {
   }
 
   if (extension === 'txt') {
-    return normalizeText(await file.text());
+    return String(await file.text() || '').replace(/\u00A0/g, ' ');
   }
 
   return '';
@@ -298,9 +468,6 @@ const FormStep = ({
     }
 
     const fileKey = `${uploadedFile.name || ''}-${uploadedFile.size || 0}-${uploadedFile.lastModified || 0}`;
-    if (jdParsedFileRef.current === fileKey) {
-      return;
-    }
 
     const extension = getUploadedFileExtension(uploadedFile);
     
@@ -338,7 +505,52 @@ const FormStep = ({
         const availableFields = Array.isArray(allFields) && allFields.length ? allFields : fields;
         const getAvailableField = (fieldName) =>
           availableFields.find((field) => field.name === fieldName);
-        const normalizeKey = (value) => normalizeToken(String(value || '').replace(/[^a-zA-Z0-9\s]/g, ' '));
+
+        const setUpdateIfEmpty = (fieldName, value) => {
+          if (!fieldName || Object.prototype.hasOwnProperty.call(updates, fieldName)) return;
+          if (!isEmptyValue(formData[fieldName])) return;
+          if (Array.isArray(value) && value.length === 0) return;
+          if (!Array.isArray(value) && isEmptyValue(value)) return;
+          updates[fieldName] = value;
+        };
+
+        const jsonObjects = extractJsonObjectsFromText(rawDocumentText);
+        const jdJson = jsonObjects.find((obj) => {
+          const keys = Object.keys(obj || {});
+          return keys.some((key) => ['jobname', 'positionname', 'minexperience', 'maxexperience', 'noofpositions', 'targetdate'].includes(String(key).toLowerCase()));
+        }) || null;
+
+        if (jdJson) {
+          const rawJobName = jdJson.positionName || jdJson.jobName || jdJson.jobTitle || jdJson.jobTitleRole || '';
+          const rawMinExp = jdJson.minExperience || jdJson.minimumExperience || '';
+          const rawMaxExp = jdJson.maxExperience || jdJson.maximumExperience || '';
+          const rawMinSalary = jdJson.minSalary || jdJson.minimumSalary || jdJson.minCtc || '';
+          const rawMaxSalary = jdJson.maxSalary || jdJson.maximumSalary || jdJson.maxCtc || '';
+          const rawOpenings = jdJson.noOfPositions || jdJson.numberOfPositions || jdJson.openings || jdJson.vacancies || '';
+          const rawTargetDate = jdJson.targetDate || '';
+          const rawJobReceivedDate = jdJson.jobReceivedDate || jdJson.receivedDate || '';
+          const rawValidityDate = jdJson.jobActivationDate || jdJson.validityUpto || jdJson.validityDate || '';
+
+          setUpdateIfEmpty('positionName', normalizeText(rawJobName));
+          setUpdateIfEmpty('minExperience', String(rawMinExp || '').match(/\d+(?:\.\d+)?/)?.[0] || '');
+          setUpdateIfEmpty('maxExperience', String(rawMaxExp || '').match(/\d+(?:\.\d+)?/)?.[0] || '');
+          setUpdateIfEmpty('minSalary', String(rawMinSalary || '').match(/\d+(?:\.\d+)?/)?.[0] || '');
+          setUpdateIfEmpty('maxSalary', String(rawMaxSalary || '').match(/\d+(?:\.\d+)?/)?.[0] || '');
+          setUpdateIfEmpty('noOfPositions', String(rawOpenings || '').match(/\d{1,3}/)?.[0] || '');
+          setUpdateIfEmpty('targetDate', normalizeDateToIso(rawTargetDate));
+          setUpdateIfEmpty('jobReceivedDate', normalizeDateToIso(rawJobReceivedDate));
+          setUpdateIfEmpty('jobActivationDate', normalizeDateToIso(rawValidityDate));
+
+          const locationFieldFromJson = getAvailableField('location');
+          const jsonLocation = Array.isArray(jdJson.location) ? jdJson.location : [];
+          const locationMatches = collectMatchingOptionValues(
+            normalizeToken(jsonLocation.join(' ')),
+            locationFieldFromJson?.options || []
+          );
+          setUpdateIfEmpty('location', locationMatches);
+        }
+
+        const normalizeKey = (value) => normalizeAliasToken(value);
         const keyValueEntries = rawLines
           .map((line) => {
             const colonSeparatedMatch = line.match(/^([^:\-]{2,80})\s*[:\-]\s*(.+)$/);
@@ -350,7 +562,7 @@ const FormStep = ({
             if (!match) return null;
 
             const rawKey = normalizeText(match[1]);
-            const rawValue = normalizeText(match[2]);
+            const rawValue = cleanExtractedValue(match[2]);
             if (!rawKey || !rawValue) return null;
             if (/^(yes|no)$/i.test(rawValue)) return null;
 
@@ -360,12 +572,36 @@ const FormStep = ({
             };
           })
           .filter((entry) => entry && entry.key && entry.value);
+
+        // DOCX tables often render as label line followed by value line.
+        const twoLineKeyValueEntries = rawLines
+          .map((line, index, all) => {
+            if (index >= all.length - 1) return null;
+
+            const keyCandidate = normalizeText(line);
+            const valueCandidate = cleanExtractedValue(all[index + 1]);
+            if (!keyCandidate || !valueCandidate) return null;
+
+            const normalizedKeyCandidate = normalizeKey(keyCandidate);
+            const keyLooksLikeLabel = /(job|position|title|role|designation|experience|salary|ctc|opening|vacanc|client|location|employment|work\s*type|hiring\s*type)/i.test(normalizedKeyCandidate);
+            const valueLooksLikeLabel = /(job|position|title|role|designation|experience|salary|ctc|opening|vacanc|client|location|employment|work\s*type|hiring\s*type)$/i.test(normalizeKey(valueCandidate));
+
+            if (!keyLooksLikeLabel || valueLooksLikeLabel) return null;
+
+            return {
+              key: normalizedKeyCandidate,
+              value: valueCandidate
+            };
+          })
+          .filter((entry) => entry && entry.key && entry.value);
+
+        const allKeyValueEntries = [...keyValueEntries, ...twoLineKeyValueEntries];
         const getLineLabelValue = (labels = []) => {
           const normalizedLabels = labels.map((label) => normalizeKey(label));
-          const matchedEntry = keyValueEntries.find((entry) =>
+          const matchedEntry = allKeyValueEntries.find((entry) =>
             normalizedLabels.some((label) => entry.key.includes(label) || label.includes(entry.key))
           );
-          return normalizeText(matchedEntry?.value || '');
+          return cleanExtractedValue(matchedEntry?.value || '');
         };
         const extractLabelValue = (labels, stopLabels = []) => {
           const labelPattern = labels.map((label) => label.replace(/\s+/g, '\\s*')).join('|');
@@ -402,7 +638,16 @@ const FormStep = ({
           return normalizeText(match?.[1] || '');
         };
 
-        let positionMatch = getLineLabelValue(['job name', 'position name', 'position', 'job title', 'role', 'designation']) || documentText.match(
+        let positionMatch = getLineLabelValue([
+          'job name',
+          'position name',
+          'position',
+          'job title',
+          'job title role',
+          'title role',
+          'role',
+          'designation'
+        ]) || documentText.match(
           /(?:job\s*name|position\s*name|job\s*title|role)\s*[:\-]\s*(.+?)(?=\s+(?:position\s*level|location|job\s*type|employment\s*type|work\s*type|hiring\s*type|positions?|openings?|min(?:imum)?\s*(?:experience|exp|salary|ctc)|max(?:imum)?\s*(?:experience|exp|salary|ctc)|salary|ctc|technical\s*skills?|soft\s*skills?|additional\s*skills?)\s*[:\-]|$)/i
         )?.[1];
         if (positionMatch) {
@@ -417,21 +662,79 @@ const FormStep = ({
           updates.positionName = normalizeText(positionMatch);
         }
 
-        const rangeMatch = normalizedText.match(/(\d{1,2})\s*(?:to|\-|–)\s*(\d{1,2})\s*(?:years|year|yrs|yr)/i);
-        const minMatch = normalizedText.match(/(?:minimum|min)\s*(?:experience)?\s*[:\-]?\s*(\d{1,2})/i);
-        const maxMatch = normalizedText.match(/(?:maximum|max)\s*(?:experience)?\s*[:\-]?\s*(\d{1,2})/i);
+        if (!updates.positionName && !normalizeText(formData.positionName)) {
+          const positionNewLineMatch = rawDocumentText.match(
+            /(?:job\s*name|position\s*name|job\s*title|title\s*\/\s*role|role|designation)\s*[:\-]?\s*(?:\r?\n\s*)?([^\r\n:]{2,100})/i
+          )?.[1];
+          if (positionNewLineMatch) {
+            updates.positionName = normalizeText(positionNewLineMatch).split(/\s+/).slice(0, 8).join(' ');
+          }
+        }
 
-        const minExperienceFromLine = getLineLabelValue(['min experience', 'minimum experience', 'experience min']).match(/\d{1,2}/)?.[0] || '';
-        const maxExperienceFromLine = getLineLabelValue(['max experience', 'maximum experience', 'experience max']).match(/\d{1,2}/)?.[0] || '';
+        const parseRangeNumbers = (value) => {
+          const raw = String(value || '');
+          if (!raw) return null;
+          const range = raw.match(/(\d{1,2}(?:\.\d+)?)\s*(?:to|-)\s*(\d{1,2}(?:\.\d+)?)/i);
+          if (!range) return null;
+          return { min: range[1], max: range[2] };
+        };
 
-        const minExperience = rangeMatch?.[1] || minMatch?.[1] || minExperienceFromLine;
-        const maxExperience = rangeMatch?.[2] || maxMatch?.[1] || maxExperienceFromLine;
+        const experienceLine = getLineLabelValue([
+          'experience',
+          'experience years',
+          'required experience',
+          'min experience',
+          'max experience'
+        ]);
+
+        const rangeMatch = normalizedText.match(/(\d{1,2}(?:\.\d+)?)\s*(?:to|-)\s*(\d{1,2}(?:\.\d+)?)\s*(?:years|year|yrs|yr)/i);
+        const minMatch = normalizedText.match(/(?:minimum|min)\s*(?:experience|exp)?\s*[:\-]?\s*(\d{1,2}(?:\.\d+)?)/i);
+        const maxMatch = normalizedText.match(/(?:maximum|max)\s*(?:experience|exp)?\s*[:\-]?\s*(\d{1,2}(?:\.\d+)?)/i);
+
+        const minExperienceFromLine = getLineLabelValue([
+          'min experience',
+          'minimum experience',
+          'experience min'
+        ]).match(/\d{1,2}(?:\.\d+)?/)?.[0] || '';
+        const maxExperienceFromLine = getLineLabelValue([
+          'max experience',
+          'maximum experience',
+          'experience max'
+        ]).match(/\d{1,2}(?:\.\d+)?/)?.[0] || '';
+        const experienceRangeFromLine = parseRangeNumbers(experienceLine);
+
+        const minExperience =
+          rangeMatch?.[1] ||
+          minMatch?.[1] ||
+          minExperienceFromLine ||
+          experienceRangeFromLine?.min ||
+          '';
+        const maxExperience =
+          rangeMatch?.[2] ||
+          maxMatch?.[1] ||
+          maxExperienceFromLine ||
+          experienceRangeFromLine?.max ||
+          '';
 
         if (minExperience && !normalizeText(formData.minExperience)) {
           updates.minExperience = minExperience;
         }
         if (maxExperience && !normalizeText(formData.maxExperience)) {
           updates.maxExperience = maxExperience;
+        }
+
+        if ((!updates.minExperience || !updates.maxExperience) && (!normalizeText(formData.minExperience) || !normalizeText(formData.maxExperience))) {
+          const experienceNewLineRange = rawDocumentText.match(
+            /(?:required\s*)?experience(?:\s*\(.*?\))?\s*[:\-]?\s*(?:\r?\n\s*)?(\d{1,2}(?:\.\d+)?)\s*(?:to|\-|–)\s*(\d{1,2}(?:\.\d+)?)/i
+          );
+          if (experienceNewLineRange) {
+            if (!updates.minExperience && !normalizeText(formData.minExperience)) {
+              updates.minExperience = experienceNewLineRange[1];
+            }
+            if (!updates.maxExperience && !normalizeText(formData.maxExperience)) {
+              updates.maxExperience = experienceNewLineRange[2];
+            }
+          }
         }
 
         const normalizeSalaryNumber = (value) => {
@@ -442,9 +745,19 @@ const FormStep = ({
           return String(Math.round(parsed));
         };
 
+        const salaryLineValue = getLineLabelValue([
+          'salary',
+          'salary range',
+          'ctc',
+          'ctc range',
+          'compensation',
+          'package'
+        ]);
+
         const salaryRangeMatch = combinedText.match(
           /(?:salary|ctc|compensation|package)\s*(?:range)?\s*[:\-]?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:to|\-|–)\s*(\d[\d,]*(?:\.\d+)?)/i
         );
+        const salaryRangeFromLine = parseRangeNumbers(salaryLineValue);
         const minSalaryMatch = combinedText.match(
           /(?:min(?:imum)?\s*(?:salary|ctc|compensation|package)|(?:salary|ctc)\s*min)\s*[:\-]?\s*(\d[\d,]*(?:\.\d+)?)/i
         );
@@ -454,8 +767,20 @@ const FormStep = ({
 
         const minSalaryFromLine = getLineLabelValue(['min salary', 'minimum salary', 'salary min', 'min ctc', 'minimum ctc']);
         const maxSalaryFromLine = getLineLabelValue(['max salary', 'maximum salary', 'salary max', 'max ctc', 'maximum ctc']);
-        const minSalary = normalizeSalaryNumber(salaryRangeMatch?.[1] || minSalaryMatch?.[1] || minSalaryFromLine);
-        const maxSalary = normalizeSalaryNumber(salaryRangeMatch?.[2] || maxSalaryMatch?.[1] || maxSalaryFromLine);
+        const minSalary = normalizeSalaryNumber(
+          salaryRangeMatch?.[1] ||
+          minSalaryMatch?.[1] ||
+          minSalaryFromLine ||
+          salaryRangeFromLine?.min ||
+          ''
+        );
+        const maxSalary = normalizeSalaryNumber(
+          salaryRangeMatch?.[2] ||
+          maxSalaryMatch?.[1] ||
+          maxSalaryFromLine ||
+          salaryRangeFromLine?.max ||
+          ''
+        );
 
         if (minSalary && !normalizeText(formData.minSalary)) {
           updates.minSalary = minSalary;
@@ -464,11 +789,41 @@ const FormStep = ({
           updates.maxSalary = maxSalary;
         }
 
-        const openingsMatch = normalizedText.match(/(?:positions?|openings?)\s*[:\-]?\s*(\d{1,3})/i);
-        const openingsFromLine = getLineLabelValue(['positions', 'no of positions', 'number of positions', 'openings']).match(/\d{1,3}/)?.[0] || '';
+        if ((!updates.minSalary || !updates.maxSalary) && (!normalizeText(formData.minSalary) || !normalizeText(formData.maxSalary))) {
+          const salaryNewLineRange = rawDocumentText.match(
+            /(?:salary|ctc|compensation|package)(?:\s*range)?\s*[:\-]?\s*(?:\r?\n\s*)?(\d[\d,]*(?:\.\d+)?)\s*(?:to|\-|–)\s*(\d[\d,]*(?:\.\d+)?)/i
+          );
+          if (salaryNewLineRange) {
+            if (!updates.minSalary && !normalizeText(formData.minSalary)) {
+              updates.minSalary = normalizeSalaryNumber(salaryNewLineRange[1]);
+            }
+            if (!updates.maxSalary && !normalizeText(formData.maxSalary)) {
+              updates.maxSalary = normalizeSalaryNumber(salaryNewLineRange[2]);
+            }
+          }
+        }
+
+        const openingsMatch = normalizedText.match(/(?:no\s*of\s*positions?|number\s*of\s*positions?|positions?|openings?|vacancies)\s*[:\-]?\s*(\d{1,3})/i);
+        const openingsFromLine = getLineLabelValue([
+          'positions',
+          'no of positions',
+          'number of positions',
+          'no positions',
+          'openings',
+          'vacancies'
+        ]).match(/\d{1,3}/)?.[0] || '';
         const openingsValue = openingsMatch?.[1] || openingsFromLine;
         if (openingsValue && !normalizeText(formData.noOfPositions)) {
           updates.noOfPositions = openingsValue;
+        }
+
+        if (!updates.noOfPositions && !normalizeText(formData.noOfPositions)) {
+          const openingsNewLineMatch = rawDocumentText.match(
+            /(?:no\.?\s*of\s*positions?|number\s*of\s*positions?|positions?|openings?|vacancies)\s*[:\-]?\s*(?:\r?\n\s*)?(\d{1,3})/i
+          )?.[1];
+          if (openingsNewLineMatch) {
+            updates.noOfPositions = openingsNewLineMatch;
+          }
         }
 
         if (!normalizeText(formData.jobReceivedDate)) {
@@ -576,6 +931,39 @@ const FormStep = ({
         if (extractedAdditionalSkills && !normalizeText(formData.additionalSkills)) {
           updates.additionalSkills = extractedAdditionalSkills;
         }
+
+        const skipGenericAutofillFields = new Set([
+          'jdAttachment',
+          'jdAttachmentMode',
+          'jobPositionId'
+        ]);
+
+        availableFields.forEach((field) => {
+          const fieldName = field?.name;
+          if (!fieldName || skipGenericAutofillFields.has(fieldName)) return;
+          if (Object.prototype.hasOwnProperty.call(updates, fieldName)) return;
+          if (!isEmptyValue(formData[fieldName])) return;
+
+          const aliases = buildFieldAliases(field);
+          if (aliases.length === 0) return;
+
+          const matchedEntry = allKeyValueEntries.find((entry) =>
+            aliases.some((alias) => entry.key === alias || entry.key.includes(alias) || alias.includes(entry.key))
+          );
+
+          if (!matchedEntry?.value) return;
+
+          const coercedValue = coerceFieldValue(field, matchedEntry.value, normalizedText);
+          if (Array.isArray(coercedValue) && coercedValue.length === 0) return;
+          if (!Array.isArray(coercedValue) && isEmptyValue(coercedValue)) return;
+
+          if (String(field.type || '').toLowerCase() === 'multiselect') {
+            updates[fieldName] = mergeUnique(formData[fieldName], coercedValue);
+            return;
+          }
+
+          updates[fieldName] = coercedValue;
+        });
 
         const fieldCount = Object.keys(updates).length;
         if (fieldCount > 0) {

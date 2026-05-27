@@ -2,10 +2,17 @@ import axios from 'axios';
 
 function resolveApiBaseUrl() {
   const configured = String(import.meta.env.VITE_API_URL || '').trim();
-  const fallback = 'http://localhost:3001/api';
+  const fallback = '/api';
+  const host = String(window?.location?.hostname || '').toLowerCase();
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
 
   if (!configured) {
     return fallback;
+  }
+
+  // In local dev, force relative proxy to avoid stale remote env values.
+  if (isLocalHost) {
+    return '/api';
   }
 
   // Guard against placeholder values left in env templates.
