@@ -46,6 +46,8 @@ export const USER_ROLES = {
 
 export const DASHBOARD_UUID_MAP = {
   recruiter: '62ae3ed4-ca6c-49bf-99ed-d02afa453d9f',
-  account_manager: '5c1bb2ee-d7a5-4522-9c9f-234f7b5a8eab',
+  account_manager: '2601d9f3-cf7d-4a79-a8f5-1d090874dbae',
+  accountmanager: '2601d9f3-cf7d-4a79-a8f5-1d090874dbae',
+  'account manager': '2601d9f3-cf7d-4a79-a8f5-1d090874dbae',
   default: '62ae3ed4-ca6c-49bf-99ed-d02afa453d9f',
 };

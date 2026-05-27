@@ -16,6 +16,14 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { jobOpeningConfig } from "../../components/forms/formConfigs";
 import ReusableForm from "../../components/forms/ReusableForm";
+import {
+  createJob as createJobApi,
+  deleteJob as deleteJobApi,
+  fetchClients,
+  fetchJobs,
+  normalizeJobRecord as normalizeApiJob,
+  updateJob as updateJobApi,
+} from "../../api/jobClientService";
 import { getClientOptions, loadClientRows } from "../../utils/clientStore";
 import styles from "./JobOpenings.module.scss";
 
@@ -41,6 +49,10 @@ const resolveUserName = () => {
 const JOB_OPENING_DRAFT_STORAGE_KEY = "job-openings:add-draft:v1";
 const JOB_OPENING_TABLE_STORAGE_KEY = "job-openings:table:v1";
 const createJobOpeningDraftId = () => `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const isUuid = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim(),
+  );
 
 const saveJobOpeningTableData = (rows) => {
   try {
@@ -456,6 +468,40 @@ export default function JobOpenings({ createMode = false }) {
       window.removeEventListener("storage", refreshClientOptions);
     };
   }, [showJobOpeningForm]);
+
+  React.useEffect(() => {
+    let isMounted = true;
+
+    const syncWithBackend = async () => {
+      try {
+        const [jobs, clients] = await Promise.all([fetchJobs(), fetchClients()]);
+
+        if (!isMounted) return;
+
+        if (Array.isArray(jobs) && jobs.length > 0) {
+          const normalizedJobs = jobs.map((job, index) => normalizeApiJob(job, index));
+          setSubmittedData(normalizedJobs);
+          saveJobOpeningTableData(normalizedJobs);
+        }
+
+        if (Array.isArray(clients) && clients.length > 0) {
+          const clientRows = clients.map((client) => ({
+            clientId: client?.clientId || client?.id || "",
+            clientName: client?.clientName || client?.name || "",
+          }));
+          setClientOptions(getClientOptions(clientRows));
+        }
+      } catch (error) {
+        console.warn("Job/Client API sync failed, using cached local data:", error);
+      }
+    };
+
+    syncWithBackend();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const sanitizeDraftValue = React.useCallback((value) => {
     const sanitize = (input) => {
@@ -937,9 +983,17 @@ export default function JobOpenings({ createMode = false }) {
     });
   }, [navigate]);
 
-  const handleDeleteJobOpening = React.useCallback((row, index) => {
+  const handleDeleteJobOpening = React.useCallback(async (row, index) => {
     console.log('Delete job opening:', row);
     if (window.confirm('Are you sure you want to delete this job opening?')) {
+      const backendJobId = String(row?.jobId || "").trim();
+      if (isUuid(backendJobId)) {
+        try {
+          await deleteJobApi(backendJobId);
+        } catch (error) {
+          console.warn("Job delete API failed, applying local delete:", error);
+        }
+      }
       setSubmittedData(prev => prev.filter((_, i) => i !== index));
     }
   }, []);
@@ -956,7 +1010,7 @@ export default function JobOpenings({ createMode = false }) {
     };
   }, [editingData]);
 
-  const handleJobOpeningSubmit = React.useCallback((data = {}) => {
+  const handleJobOpeningSubmit = React.useCallback(async (data = {}) => {
     const safeData = data && typeof data === "object" ? data : {};
     let requestedJobPositionId = String(safeData.jobPositionId || safeData.openingJobId || nextJobPositionId).trim();
     // Always enforce unique job ID for new jobs
@@ -980,8 +1034,9 @@ export default function JobOpenings({ createMode = false }) {
         resolvedFromTeamMembers ||
         "-"
       );
-    const normalized = {
+    let normalized = {
       ...safeData,
+      jobId: safeData.jobId || null,
       jobPositionId,
       openingJobId: safeData.openingJobId || jobPositionId,
       postingTitle: safeData.postingTitle || safeData.positionName || "",
@@ -995,6 +1050,26 @@ export default function JobOpenings({ createMode = false }) {
       assignedRecruiters: resolvedAssignedRecruiters,
       candidates: Array.isArray(safeData.candidates) ? safeData.candidates : [],
     };
+
+    try {
+      const isEditMode = editingIndex !== null;
+      const existingJobId = String(
+        submittedData?.[editingIndex]?.jobId || normalized.jobId || ""
+      ).trim();
+      const hasValidClientId = isUuid(normalized.clientId);
+      const hasValidTitle = Boolean(String(normalized.postingTitle || "").trim());
+
+      if (isEditMode && isUuid(existingJobId) && hasValidClientId && hasValidTitle) {
+        const response = await updateJobApi(existingJobId, normalized);
+        normalized = { ...normalized, ...normalizeApiJob(response?.data || {}, editingIndex || 0) };
+      } else if (!isEditMode && hasValidClientId && hasValidTitle) {
+        const response = await createJobApi(normalized);
+        normalized = { ...normalized, ...normalizeApiJob(response?.data || {}, submittedData.length) };
+      }
+    } catch (error) {
+      console.warn("Job save API failed, applying local save:", error);
+    }
+
     if (editingIndex !== null) {
       setSubmittedData(prev => {
         const nextRows = prev.map((item, idx) => (idx === editingIndex ? normalized : item));
@@ -1025,7 +1100,7 @@ export default function JobOpenings({ createMode = false }) {
     setIsAddJobOpeningMenuOpen(false);
     navigate("/job-openings");
     // Here you would typically send the data to your backend API
-  }, [activeDraftId, editingIndex, navigate, nextJobPositionId, persistJobOpeningDrafts, showTransientMessage, isJobIdUsed]);
+  }, [activeDraftId, editingIndex, navigate, nextJobPositionId, persistJobOpeningDrafts, showTransientMessage, isJobIdUsed, submittedData]);
 
   const formatInrAmount = React.useCallback((value) => {
     const numericValue = Number(value);

@@ -16,6 +16,7 @@ const Candidates = lazy(() =>
     throw err;
   })
 );
+const Applications = lazy(() => import("./pages/application/Applications.jsx"));
 const Clients = lazy(() => import("./pages/job-openings/Clients.jsx"));
 const Interviews = lazy(() => import("./pages/interviews/Interviews.jsx"));
 const JobDescription = lazy(() => import("./pages/job-openings/JobDescription.jsx"));
@@ -134,6 +135,7 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/job-openings" element={<JobOpenings />} />
             <Route path="/candidates" element={<Candidates />} />
+            <Route path="/applications" element={<Applications />} />
             <Route path="/interviews" element={<Interviews />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/job-openings/edit" element={<JobOpenings />} />

@@ -14,13 +14,17 @@ import './Login.css';
 
 const LOGIN_CREDENTIALS_BY_ROLE = {
   recruiter: [
-    { email: 'admin@example.com', password: 'admin' },
-    { email: 'recruiter@example.com', password: 'recruiter' }
+    { email: 'recruiter@method-hub.com', password: 'recruiter' },
+    { email: 'recruiter@@method-hub.com', password: 'recruiter' }
   ],
   accountManager: [
-    { email: 'accountmanager@example.com', password: 'accountmanager' },
-    { email: 'am@example.com', password: 'am123' }
+    { email: 'accmanager@method-hub.com', password: 'accmanager' }
   ]
+};
+
+const STORED_ROLE_BY_LOGIN_ROLE = {
+  recruiter: 'recruiter',
+  accountManager: 'account_manager',
 };
 
 const Login = () => {
@@ -36,12 +40,16 @@ const Login = () => {
   const validateEmail = async () => {
     if (!email) return;
     setEmailError('Validating email...');
-    // Simulate AJAX validation for email format
+    // Accept known local-login emails even if they don't match strict email regex.
     try {
       await new Promise((resolve, reject) => {
         setTimeout(() => {
+          const allAllowedEmails = Object.values(LOGIN_CREDENTIALS_BY_ROLE)
+            .flat()
+            .map((item) => item.email.toLowerCase());
+          const currentEmail = email.toLowerCase().trim();
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (emailRegex.test(email)) {
+          if (allAllowedEmails.includes(currentEmail) || emailRegex.test(currentEmail)) {
             resolve();
           } else {
             reject(new Error('Invalid email format'));
@@ -77,7 +85,7 @@ const Login = () => {
       });
 
       if (response.ok) {
-        localStorage.setItem('userRole', response.role);
+        localStorage.setItem('userRole', STORED_ROLE_BY_LOGIN_ROLE[response.role] || response.role);
         localStorage.setItem('userEmail', email.toLowerCase().trim());
         navigate('/dashboard');
       }
@@ -121,7 +129,7 @@ If you've forgotten your password, use the "Forgot Password" option<br></br> to 
             <div className="input-wrapper">
               <MdOutlineEmail className="input-icon" size="20" />
               <input
-                type="email"
+                type="text"
                 id="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -165,7 +173,7 @@ If you've forgotten your password, use the "Forgot Password" option<br></br> to 
             {loading ? 'Signing In...' : 'Sign In'}
           </button>
           <p className="login-hint">
-            Recruiter: admin@example.com / admin | Account Manager: accountmanager@example.com / accountmanager
+            Recruiter: recruiter@method-hub.com / recruiter | Account Manager: accmanager@method-hub.com / accmanager
           </p>
         </form>
       </div>

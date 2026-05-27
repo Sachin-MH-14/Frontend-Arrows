@@ -42,6 +42,19 @@ function supersetGuestTokenPlugin(env) {
   const sessionCookie = env.SUPERSET_SESSION_COOKIE || '';
   const defaultEmbedId = env.VITE_SUPERSET_EMBED_ID || '';
   const defaultResourceId = env.VITE_SUPERSET_DASHBOARD_ID || '';
+  const resourceMapEntries = String(env.VITE_SUPERSET_RESOURCE_ID_MAP || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => entry.split(':').map((part) => part.trim()))
+    .filter((parts) => parts.length === 2 && parts[0] && parts[1]);
+  const resourceIdByEmbedUuid = Object.fromEntries(
+    resourceMapEntries.map(([uuid, resourceId]) => [uuid.toLowerCase(), String(resourceId)]),
+  );
+
+  if (defaultEmbedId && defaultResourceId) {
+    resourceIdByEmbedUuid[String(defaultEmbedId).toLowerCase()] = String(defaultResourceId);
+  }
 
   function isUuidLike(value) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -49,16 +62,48 @@ function supersetGuestTokenPlugin(env) {
     );
   }
 
-  async function resolveDashboardResourceId(dashboardId) {
-    if (defaultResourceId) {
-      return String(defaultResourceId);
+  async function resolveDashboardResourceId(dashboardId, explicitResourceId = '') {
+    if (explicitResourceId) {
+      return String(explicitResourceId);
     }
 
     const normalized = String(dashboardId || '').trim();
-    if (!normalized) return '';
+    if (!normalized) {
+      return defaultResourceId ? String(defaultResourceId) : '';
+    }
+
+    const mappedResourceId = resourceIdByEmbedUuid[normalized.toLowerCase()];
+    if (mappedResourceId) {
+      return String(mappedResourceId);
+    }
+
+    if (defaultResourceId && defaultEmbedId && normalized.toLowerCase() === String(defaultEmbedId).toLowerCase()) {
+      return String(defaultResourceId);
+    }
     if (!isUuidLike(normalized)) return normalized;
 
     const authHeaders = { Cookie: `session=${sessionCookie}` };
+
+    // Best effort: query Superset by UUID directly.
+    try {
+      const query = encodeURIComponent(
+        JSON.stringify({
+          filters: [{ col: 'uuid', opr: 'eq', value: normalized }],
+          columns: ['id', 'uuid'],
+          page: 0,
+          page_size: 1,
+        }),
+      );
+      const byUuidRes = await fetch(`${supersetBaseUrl}/api/v1/dashboard/?q=${query}`, {
+        headers: authHeaders,
+      });
+      const byUuidBody = await readJsonSafely(byUuidRes);
+      if (byUuidRes.ok && Array.isArray(byUuidBody.json?.result) && byUuidBody.json.result[0]?.id != null) {
+        return String(byUuidBody.json.result[0].id);
+      }
+    } catch {
+      // fall through to other lookup strategies
+    }
 
     try {
       const listRes = await fetch(`${supersetBaseUrl}/api/v1/dashboard/`, {
@@ -170,8 +215,7 @@ function supersetGuestTokenPlugin(env) {
 
         const requestUrl = new URL(req.url || '', 'http://localhost');
         const dashboardId = requestUrl.searchParams.get('embedId') || defaultEmbedId;
-        const requestedResourceId =
-          requestUrl.searchParams.get('resourceId') || defaultResourceId;
+        const requestedResourceId = requestUrl.searchParams.get('resourceId') || '';
 
         if (!dashboardId) {
           sendJson(res, 400, {
@@ -180,8 +224,10 @@ function supersetGuestTokenPlugin(env) {
           return;
         }
 
-        const resourceId =
-          requestedResourceId || (await resolveDashboardResourceId(dashboardId));
+        const resourceId = await resolveDashboardResourceId(
+          dashboardId,
+          requestedResourceId,
+        );
 
         if (!resourceId) {
           sendJson(res, 400, {

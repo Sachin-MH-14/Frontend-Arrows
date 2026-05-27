@@ -60,8 +60,16 @@ function guestTokenFromEnv() {
   };
 }
 
-async function fetchViaInternalDevEndpoint() {
-  const response = await fetch(INTERNAL_DEV_TOKEN_PATH, {
+async function fetchViaInternalDevEndpoint(dashboardUuid = '') {
+  const query = new URLSearchParams();
+  if (dashboardUuid) {
+    query.set('embedId', dashboardUuid);
+  }
+  const endpoint = query.toString()
+    ? `${INTERNAL_DEV_TOKEN_PATH}?${query.toString()}`
+    : INTERNAL_DEV_TOKEN_PATH;
+
+  const response = await fetch(endpoint, {
     method: 'GET',
     credentials: 'same-origin',
   });
@@ -88,8 +96,10 @@ async function fetchViaInternalDevEndpoint() {
   return normalized;
 }
 
-async function fetchViaArrowsBack() {
+async function fetchViaArrowsBack(dashboardUuid = '') {
+  const params = dashboardUuid ? { embedId: dashboardUuid } : undefined;
   const proxyResponse = await API.get(SUPERSET_TOKEN_PATH, {
+    params,
     skipAuth: true,
     skipAuthRedirect: true,
   });
@@ -105,10 +115,10 @@ async function fetchViaArrowsBack() {
   return normalized;
 }
 
-export const fetchDashboardGuestToken = async () => {
+export const fetchDashboardGuestToken = async (dashboardUuid = '') => {
   // Same order as npm run dev: internal endpoint (Vite/Docker) then Arrows_back.
   try {
-    return await fetchViaInternalDevEndpoint();
+    return await fetchViaInternalDevEndpoint(dashboardUuid);
   } catch (internalError) {
     if (import.meta.env.DEV) {
       console.warn(
@@ -119,7 +129,7 @@ export const fetchDashboardGuestToken = async () => {
   }
 
   try {
-    return await fetchViaArrowsBack();
+    return await fetchViaArrowsBack(dashboardUuid);
   } catch (proxyError) {
     const fromEnv = guestTokenFromEnv();
     if (fromEnv?.token) {

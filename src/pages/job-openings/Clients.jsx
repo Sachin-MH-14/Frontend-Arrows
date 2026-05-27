@@ -3,11 +3,22 @@ import { FiChevronDown, FiFilter, FiMail, FiMapPin, FiPhone, FiSearch, FiTrash2,
 import DataTable from "../../components/forms/DataTable";
 import { clientConfig } from "../../components/forms/formConfigs";
 import ReusableForm from "../../components/forms/ReusableForm";
+import {
+  createClient as createClientApi,
+  deleteClient as deleteClientApi,
+  fetchClients,
+  normalizeClientRecord as normalizeApiClient,
+  updateClient as updateClientApi,
+} from "../../api/jobClientService";
 import { loadClientRows, saveClientRows } from "../../utils/clientStore";
 import styles from "./Clients.module.scss";
 
 const CLIENT_DRAFT_STORAGE_KEY = "clients:add-draft:v1";
 const createClientDraftId = () => `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const isUuid = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim(),
+  );
 
 export default function Clients() {
   const currentUserRole = React.useMemo(() => {
@@ -113,6 +124,30 @@ export default function Clients() {
   React.useEffect(() => {
     saveClientRows(submittedData);
   }, [submittedData]);
+
+  React.useEffect(() => {
+    let isMounted = true;
+
+    const loadClientsFromApi = async () => {
+      try {
+        const clients = await fetchClients();
+        if (!isMounted || !Array.isArray(clients)) return;
+        const normalized = clients.map((row, index) => normalizeApiClient(row, index));
+        if (normalized.length > 0) {
+          setSubmittedData(normalized);
+          saveClientRows(normalized);
+        }
+      } catch (error) {
+        console.warn("Client API sync failed, using local client rows:", error);
+      }
+    };
+
+    loadClientsFromApi();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!isViewDrawerOpen) return undefined;
@@ -458,26 +493,50 @@ export default function Clients() {
     [mapClientToFormData]
   );
 
-  const handleDeleteClient = React.useCallback((row, index) => {
+  const handleDeleteClient = React.useCallback(async (row, index) => {
     const resolvedIndex = Number.isInteger(row?._sourceIndex) ? row._sourceIndex : index;
     if (window.confirm("Are you sure you want to delete this client?")) {
+      const candidateId = String(row?.clientId || "").trim();
+      if (isUuid(candidateId)) {
+        try {
+          await deleteClientApi(candidateId);
+        } catch (error) {
+          console.warn("Client delete API failed, applying local delete:", error);
+        }
+      }
       setSubmittedData((prev) => prev.filter((item, itemIndex) => itemIndex !== resolvedIndex));
     }
   }, []);
 
   const handleClientSubmit = React.useCallback(
-    (data) => {
+    async (data) => {
       const normalized = normalizeClientRecord({
         ...data,
         clientId: String(data?.clientId || "").trim() || generateNextClientId(),
       });
       const isEditMode = editingIndex !== null;
 
-      setSubmittedData((prev) =>
-        isEditMode
-          ? prev.map((item, idx) => (idx === editingIndex ? { ...item, ...normalized } : item))
-          : [...prev, normalized]
-      );
+      try {
+        if (isEditMode && isUuid(normalized.clientId)) {
+          const response = await updateClientApi(normalized.clientId, normalized);
+          const savedRow = normalizeApiClient(response?.data || normalized);
+          setSubmittedData((prev) => prev.map((item, idx) => (idx === editingIndex ? { ...item, ...savedRow } : item)));
+        } else {
+          const response = await createClientApi(normalized);
+          const savedRow = normalizeApiClient(response?.data || normalized);
+          setSubmittedData((prev) => (isEditMode
+            ? prev.map((item, idx) => (idx === editingIndex ? { ...item, ...savedRow } : item))
+            : [...prev, savedRow]));
+        }
+      } catch (error) {
+        console.warn("Client save API failed, applying local save:", error);
+
+        setSubmittedData((prev) =>
+          isEditMode
+            ? prev.map((item, idx) => (idx === editingIndex ? { ...item, ...normalized } : item))
+            : [...prev, normalized]
+        );
+      }
 
       setShowClientForm(false);
       setShowDataTable(true);
