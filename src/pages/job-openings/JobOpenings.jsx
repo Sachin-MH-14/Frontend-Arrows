@@ -24,6 +24,7 @@ import {
   normalizeJobRecord as normalizeApiJob,
   updateJob as updateJobApi,
 } from "../../api/jobClientService";
+import { saveTeamMembers as saveTeamMembersApi } from "../../api/teamService";
 import { getClientOptions, loadClientRows } from "../../utils/clientStore";
 import styles from "./JobOpenings.module.scss";
 
@@ -105,8 +106,9 @@ const formatAssignedRecruiters = (assignedRecruiters, customTeamMembers = []) =>
   return textValue || "-";
 };
 
-const resolveAssignedRecruiterNames = (teamMembers, customTeamMembers = []) => {
+const resolveAssignedRecruiterNames = (teamMembers, customTeamMembers = [], directoryMembers = []) => {
   const teamDirectory = [
+    ...(Array.isArray(directoryMembers) ? directoryMembers : []),
     ...DEFAULT_TEAM_MEMBERS,
     ...(Array.isArray(customTeamMembers) ? customTeamMembers : []),
   ];
@@ -1023,9 +1025,13 @@ export default function JobOpenings({ createMode = false }) {
       ? safeData.location.filter(Boolean).join(", ")
       : String(safeData.location || "").trim();
     const hasTeamMemberSelection = Array.isArray(safeData.teamMembers);
+    const teamDirectory = Array.isArray(safeData.teamDirectoryCache)
+      ? safeData.teamDirectoryCache
+      : [];
     const resolvedFromTeamMembers = resolveAssignedRecruiterNames(
       safeData.teamMembers,
-      safeData.customTeamMembers
+      safeData.customTeamMembers,
+      teamDirectory
     );
     const resolvedAssignedRecruiters = hasTeamMemberSelection
       ? (resolvedFromTeamMembers || "-")
@@ -1065,6 +1071,46 @@ export default function JobOpenings({ createMode = false }) {
       } else if (!isEditMode && hasValidClientId && hasValidTitle) {
         const response = await createJobApi(normalized);
         normalized = { ...normalized, ...normalizeApiJob(response?.data || {}, submittedData.length) };
+      }
+
+      if (Array.isArray(safeData.teamMembers) && safeData.teamMembers.length > 0) {
+        const directoryById = new Map(
+          [
+            ...DEFAULT_TEAM_MEMBERS,
+            ...(Array.isArray(safeData.customTeamMembers) ? safeData.customTeamMembers : []),
+            ...(Array.isArray(safeData.teamDirectoryCache) ? safeData.teamDirectoryCache : []),
+          ].map((member) => [String(member?.id || '').trim(), member])
+        );
+
+        const roleMap =
+          safeData.teamMemberRoles && typeof safeData.teamMemberRoles === 'object'
+            ? safeData.teamMemberRoles
+            : {};
+
+        const teamMembersPayload = safeData.teamMembers
+          .map((memberId) => {
+            const key = String(memberId || '').trim();
+            if (!key) return null;
+
+            const member = directoryById.get(key) || {};
+            return {
+              userId: key,
+              name: String(member?.name || key).trim(),
+              role: String(roleMap[key] || member?.role || 'Recruiter').trim(),
+            };
+          })
+          .filter(Boolean);
+
+        if (teamMembersPayload.length > 0) {
+          await saveTeamMembersApi({
+            openingJobId: normalized.openingJobId || normalized.jobPositionId,
+            teamMembers: teamMembersPayload,
+            permissions: {
+              visibility: safeData.permissionVisibility,
+              access: safeData.permissionAccess,
+            },
+          });
+        }
       }
     } catch (error) {
       console.warn("Job save API failed, applying local save:", error);

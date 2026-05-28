@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchRecruiters } from "../../api/teamService";
 
 const TEAM_MEMBERS = [
   {
@@ -44,6 +45,7 @@ const TeamMembersStep = ({
   onSetStepFields,
   validationErrors = {},
 }) => {
+  const [apiMembers, setApiMembers] = useState([]);
   const [isModalOpen, setModalOpen] = useState(false);
   const [selectedRecruiterId, setSelectedRecruiterId] = useState("");
   const [recruiterRole, setRecruiterRole] = useState("");
@@ -53,10 +55,20 @@ const TeamMembersStep = ({
   const customTeamMembers = Array.isArray(formData.customTeamMembers)
     ? formData.customTeamMembers
     : [];
-  const allTeamMembers = useMemo(
-    () => [...TEAM_MEMBERS, ...customTeamMembers],
-    [customTeamMembers]
+  const baseMembers = useMemo(
+    () => (apiMembers.length > 0 ? apiMembers : TEAM_MEMBERS),
+    [apiMembers]
   );
+  const allTeamMembers = useMemo(() => {
+    const merged = [...baseMembers, ...customTeamMembers];
+    const seen = new Set();
+    return merged.filter((member) => {
+      const key = String(member?.id || '').trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [baseMembers, customTeamMembers]);
   const selectedMembers = Array.isArray(formData.teamMembers)
     ? formData.teamMembers
     : [];
@@ -66,10 +78,42 @@ const TeamMembersStep = ({
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadRecruiters = async () => {
+      try {
+        const openingJobId = String(formData.openingJobId || formData.jobPositionId || '').trim();
+        const recruiters = await fetchRecruiters({ openingJobId: openingJobId || undefined });
+        if (!cancelled && Array.isArray(recruiters) && recruiters.length > 0) {
+          setApiMembers(recruiters);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Falling back to static team members:', error);
+          setApiMembers([]);
+        }
+      }
+    };
+
+    loadRecruiters();
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.openingJobId, formData.jobPositionId]);
+
+  useEffect(() => {
     if (formData.teamMembers === undefined) {
-      onChange("teamMembers", TEAM_MEMBERS.map((member) => member.id));
+      onChange("teamMembers", allTeamMembers.map((member) => member.id));
     }
-  }, [formData.teamMembers, onChange]);
+  }, [allTeamMembers, formData.teamMembers, onChange]);
+
+  useEffect(() => {
+    const currentSnapshot = JSON.stringify(Array.isArray(formData.teamDirectoryCache) ? formData.teamDirectoryCache : []);
+    const nextSnapshot = JSON.stringify(allTeamMembers);
+    if (currentSnapshot !== nextSnapshot) {
+      onChange('teamDirectoryCache', allTeamMembers);
+    }
+  }, [allTeamMembers, formData.teamDirectoryCache, onChange]);
 
   useEffect(() => {
     if (onSetStepFields) {

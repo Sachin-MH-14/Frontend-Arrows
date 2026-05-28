@@ -211,6 +211,75 @@ const normalizeDateToIso = (value) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+const formatOptionLabels = (selectedValues, options = []) => {
+  const normalizedValues = Array.isArray(selectedValues)
+    ? selectedValues
+    : String(selectedValues || '').split(',').map((item) => item.trim()).filter(Boolean);
+
+  if (normalizedValues.length === 0) return [];
+
+  const optionLabelByValue = new Map(
+    (Array.isArray(options) ? options : []).map((option) => [String(option.value), option.label || option.value])
+  );
+
+  return normalizedValues.map((value) => optionLabelByValue.get(String(value)) || String(value));
+};
+
+const buildGeneratedJobDescription = (formData, fieldMap = {}) => {
+  const positionName = String(formData.positionName || 'the role').trim();
+  const positionLevel = formatOptionLabels(formData.positionLevel, fieldMap.positionLevel?.options || [])[0] || String(formData.positionLevel || '').trim();
+  const workType = formatOptionLabels(formData.hiringType, fieldMap.hiringType?.options || [])[0] || String(formData.hiringType || '').trim();
+  const employmentType = formatOptionLabels(formData.jobType, fieldMap.jobType?.options || [])[0] || String(formData.jobType || '').trim();
+  const locations = formatOptionLabels(formData.location, fieldMap.location?.options || []).join(', ');
+  const technicalSkills = formatOptionLabels(formData.technicalSkills, fieldMap.technicalSkills?.options || []).join(', ');
+  const softSkills = formatOptionLabels(formData.softSkills, fieldMap.softSkills?.options || []).join(', ');
+  const addTechnicalSkills = formatOptionLabels(formData.addTechnicalSkills, fieldMap.addTechnicalSkills?.options || []).join(', ');
+  const additionalSkills = String(formData.additionalSkills || '').trim();
+  const minExp = String(formData.minExperience || '').trim();
+  const maxExp = String(formData.maxExperience || '').trim();
+  const openings = String(formData.noOfPositions || '').trim();
+  const prompt = String(formData.jdPrompt || '').trim();
+
+  const experienceText = minExp || maxExp
+    ? `${minExp || '0'} to ${maxExp || minExp || '0'} years`
+    : 'relevant experience';
+
+  const summaryParts = [
+    positionLevel && `${positionLevel}`,
+    positionName,
+    workType && `for a ${workType.toLowerCase()} setup`,
+    employmentType && `on a ${employmentType.toLowerCase()} basis`,
+  ].filter(Boolean);
+
+  const requirementLines = [
+    technicalSkills && `Primary technical skills: ${technicalSkills}.`,
+    softSkills && `Expected soft skills: ${softSkills}.`,
+    additionalSkills && `Additional skills: ${additionalSkills}.`,
+    addTechnicalSkills && `Preferred technical exposure: ${addTechnicalSkills}.`,
+    locations && `Work location(s): ${locations}.`,
+    openings && `Number of open positions: ${openings}.`,
+  ].filter(Boolean);
+
+  const promptLine = prompt ? `Hiring context: ${prompt}` : '';
+
+  return [
+    `Job Title: ${positionName}`,
+    '',
+    'Overview',
+    `${summaryParts.join(' ')}. The ideal candidate should bring ${experienceText} and be ready to contribute from day one.`,
+    '',
+    'Key Responsibilities',
+    `- Deliver high-quality outcomes for ${positionName}.`,
+    `- Collaborate with internal stakeholders and cross-functional teams to drive execution.`,
+    `- Translate business requirements into clear, actionable deliverables.`,
+    `- Maintain quality, ownership, and timely communication throughout the hiring lifecycle.`,
+    '',
+    'Required Qualifications',
+    ...requirementLines.map((line) => `- ${line}`),
+    promptLine ? `- ${promptLine}` : '',
+  ].filter(Boolean).join('\n');
+};
+
 const coerceFieldValue = (field, rawValue, combinedNormalizedText) => {
   const type = String(field?.type || '').toLowerCase();
   const normalizedRawValue = normalizeText(rawValue);
@@ -1128,6 +1197,11 @@ const FormStep = ({
       placeholder: addTechnicalConfig.placeholder || 'Select skills'
     };
 
+    const handleGenerateJd = () => {
+      const generatedText = buildGeneratedJobDescription(formData, fieldMap);
+      onChangeRef.current('generatedJd', generatedText);
+    };
+
     return (
       <div className="job-basic-info-step">
         <div className="job-section">
@@ -1231,6 +1305,46 @@ const FormStep = ({
             </div>
             <div className="grid-cell grid-col-3 grid-row-5">
               {renderField(normalizedAddTechnicalConfig)}
+            </div>
+            <div className="grid-cell grid-col-1 grid-row-6 grid-span-2">
+              <div className="job-jd-generator">
+                <label className="job-jd-generator-label" htmlFor="jdPrompt">
+                  Generate Job Description
+                </label>
+                <textarea
+                  id="jdPrompt"
+                  className="job-jd-generator-textarea"
+                  value={String(formData.jdPrompt || '')}
+                  onChange={(event) => onChangeRef.current('jdPrompt', event.target.value)}
+                  placeholder="Enter role details, required skills, responsibilities, and hiring context..."
+                  disabled={disabled}
+                />
+                <div className="job-jd-generator-actions">
+                  <button
+                    type="button"
+                    className="job-jd-generator-button"
+                    onClick={handleGenerateJd}
+                    disabled={disabled || !String(formData.jdPrompt || '').trim()}
+                  >
+                    Generate JD
+                  </button>
+                </div>
+                {String(formData.generatedJd || '').trim() ? (
+                  <div className="job-jd-generator-preview">
+                    <label className="job-jd-generator-label" htmlFor="generatedJdPreview">
+                      Generated JD Preview
+                    </label>
+                    <textarea
+                      id="generatedJdPreview"
+                      className="job-jd-generator-textarea job-jd-generator-textarea--preview"
+                      value={String(formData.generatedJd || '')}
+                      onChange={(event) => onChangeRef.current('generatedJd', event.target.value)}
+                      placeholder="Generated job description will appear here"
+                      disabled={disabled}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

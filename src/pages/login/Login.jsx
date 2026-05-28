@@ -1,16 +1,17 @@
 import '@fontsource/poppins/400.css';
 import '@fontsource/poppins/500.css';
 import '@fontsource/poppins/700.css';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FiEye, FiEyeOff } from "react-icons/fi";
 import { MdOutlineEmail } from "react-icons/md";
 import { TbLockPassword } from "react-icons/tb";
 import { useNavigate } from 'react-router-dom';
+import { exchangeSsoCallback, fetchSsoAuthorizeUrl, loginWithPassword } from '../../api/authService';
 import arrowLogo from "../../assets/login/arrow_logo.png";
-import maskGroup from "../../assets/login/mask_group.png";
-import loginCircle from "../../assets/login/login_circle.png";
-import loginCircle2 from "../../assets/login/login_circle2.png";
+import loginLeftImage from "../../assets/login/login-bg.jpeg";
 import './Login.css';
+
+const USE_LOGIN_API = false;
 
 const LOGIN_CREDENTIALS_BY_ROLE = {
   recruiter: [
@@ -24,7 +25,81 @@ const LOGIN_CREDENTIALS_BY_ROLE = {
 
 const STORED_ROLE_BY_LOGIN_ROLE = {
   recruiter: 'recruiter',
-  accountManager: 'account_manager',
+  accountManager: 'accountmanager',
+};
+
+const ROLE_ALIAS_MAP = {
+  recruiter: 'recruiter',
+  accountmanager: 'accountmanager',
+  account_manager: 'accountmanager',
+  'account manager': 'accountmanager',
+  manager: 'accountmanager',
+  management: 'accountmanager',
+};
+
+const normalizeRoleValue = (value) => {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  const compact = text.replace(/[\s_-]+/g, '');
+  return ROLE_ALIAS_MAP[text] || ROLE_ALIAS_MAP[compact] || compact;
+};
+
+const extractRoleValue = (response = {}) => {
+  if (response?.role) {
+    return normalizeRoleValue(response.role);
+  }
+
+  if (Array.isArray(response?.roles)) {
+    const firstRole = response.roles.find(Boolean);
+    if (typeof firstRole === 'string') {
+      return normalizeRoleValue(firstRole);
+    }
+    if (firstRole && typeof firstRole === 'object') {
+      return normalizeRoleValue(firstRole.role || firstRole.name || firstRole.authority || '');
+    }
+  }
+
+  if (Array.isArray(response?.authorities)) {
+    const firstAuthority = response.authorities.find(Boolean);
+    if (typeof firstAuthority === 'string') {
+      return normalizeRoleValue(firstAuthority);
+    }
+    if (firstAuthority && typeof firstAuthority === 'object') {
+      return normalizeRoleValue(firstAuthority.authority || firstAuthority.name || '');
+    }
+  }
+
+  return '';
+};
+
+const getAuthErrorMessage = (err, fallbackMessage) => {
+  const status = Number(err?.response?.status || 0);
+  const data = err?.response?.data;
+
+  if (typeof data === 'string' && data.trim()) {
+    return data.trim();
+  }
+
+  const backendMessage = String(
+    data?.message || data?.error || data?.details || '',
+  ).trim();
+  if (backendMessage) {
+    return backendMessage;
+  }
+
+  if (status === 401) {
+    return 'Invalid email or password.';
+  }
+
+  if (status >= 500) {
+    return 'Login service is unavailable. Start API gateway on http://localhost:8080 and try again.';
+  }
+
+  if (!err?.response) {
+    return 'Cannot reach login service. Check backend is running on http://localhost:8080.';
+  }
+
+  return err?.message || fallbackMessage;
 };
 
 const Login = () => {
@@ -36,6 +111,73 @@ const Login = () => {
   const [error, setError] = useState('');
   const [emailError, setEmailError] = useState('');
   const navigate = useNavigate();
+
+  const persistAuthSession = (response = {}, fallbackRole = '') => {
+    const emailValue = String(response?.email || email || '').toLowerCase().trim();
+    const roleValue = extractRoleValue(response) || STORED_ROLE_BY_LOGIN_ROLE[fallbackRole] || normalizeRoleValue(fallbackRole);
+
+    if (emailValue) {
+      localStorage.setItem('userEmail', emailValue);
+    }
+    if (roleValue) {
+      localStorage.setItem('userRole', roleValue);
+    }
+    if (response?.name) {
+      localStorage.setItem('userName', String(response.name).trim());
+    }
+    if (response?.token) {
+      localStorage.setItem('token', response.token);
+      localStorage.setItem('authToken', response.token);
+    }
+  };
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const code = String(searchParams.get('code') || '').trim();
+    const state = String(searchParams.get('state') || '').trim();
+    const oauthError = String(searchParams.get('error') || '').trim();
+
+    if (oauthError) {
+      Promise.resolve().then(() => {
+        setError(searchParams.get('error_description') || oauthError);
+      });
+      return;
+    }
+
+    if (!code || !state) {
+      return;
+    }
+
+    let active = true;
+
+    const completeSso = async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const response = await exchangeSsoCallback({ code, state });
+        if (!active) return;
+
+        persistAuthSession(response);
+
+        const cleanUrl = `${window.location.origin}/login`;
+        window.history.replaceState({}, document.title, cleanUrl);
+        navigate('/dashboard', { replace: true });
+      } catch (err) {
+        if (!active) return;
+        setError(err?.response?.data?.error || err?.message || 'SSO login failed');
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    completeSso();
+
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
 
   const validateEmail = async () => {
     if (!email) return;
@@ -67,63 +209,72 @@ const Login = () => {
     setLoading(true);
     setError('');
 
-    // Simulate AJAX validation
     try {
-      const response = await new Promise((resolve, reject) => {
-        setTimeout(() => {
-          const roleCredentials = LOGIN_CREDENTIALS_BY_ROLE[role] || [];
-          const isValid = roleCredentials.some(
-            (item) => item.email.toLowerCase() === email.toLowerCase().trim() && item.password === password
-          );
+      const normalizedEmail = email.toLowerCase().trim();
+      const roleCredentials = LOGIN_CREDENTIALS_BY_ROLE[role] || [];
 
-          if (isValid) {
-            resolve({ ok: true, role });
-          } else {
-            reject(new Error('Invalid credentials for selected role'));
-          }
-        }, 1000); // Simulate network delay
-      });
+      if (!USE_LOGIN_API) {
+        const localMatch = roleCredentials.some(
+          (item) => item.email.toLowerCase() === normalizedEmail && item.password === password,
+        );
 
-      if (response.ok) {
-        localStorage.setItem('userRole', STORED_ROLE_BY_LOGIN_ROLE[response.role] || response.role);
-        localStorage.setItem('userEmail', email.toLowerCase().trim());
-        navigate('/dashboard');
+        if (!localMatch) {
+          throw new Error('Invalid email or password.');
+        }
+
+        persistAuthSession(
+          {
+            email: normalizedEmail,
+            role: STORED_ROLE_BY_LOGIN_ROLE[role],
+            token: `local-${role}-token`,
+            name: role === 'accountManager' ? 'Account Manager' : 'Recruiter',
+          },
+          role,
+        );
+      } else {
+        const response = await loginWithPassword({
+          email: normalizedEmail,
+          password,
+        });
+        persistAuthSession(response, role);
       }
+
+      navigate('/dashboard');
     } catch (err) {
-      setError(err.message);
+      if (USE_LOGIN_API) {
+        setError(getAuthErrorMessage(err, 'Login failed'));
+      } else {
+        setError(err?.message || 'Login failed');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSsoLogin = async () => {
+    setError('');
+    try {
+      const url = await fetchSsoAuthorizeUrl();
+      if (!url) {
+        throw new Error('SSO authorize URL is not available');
+      }
+      window.location.href = url;
+    } catch (err) {
+      setError(getAuthErrorMessage(err, 'Unable to start SSO login'));
     }
   };
 
   return (
     <div className="login-container">
       <div className="login-left">
-        <h1>Welcome Back <span className="sign-in">Sign In</span></h1>
-        <p className="para-text1">Access Your Account</p>
-        <p className="para-text2">Please enter your email and password to continue.<br></br>
-If you've forgotten your password, use the "Forgot Password" option<br></br> to reset it. Make sure your login details are secure and up to date.</p>
-        <img src={maskGroup} alt="Logo" className="login-logo" />
-        <img src={loginCircle} alt="Login Circle" className="login-circle" />
-        <img src={loginCircle2} alt="Login Circle 2" className="login-circle2" />
+        <img src={loginLeftImage} alt="Team" className="login-left-image" />
+        <h1 className="login-left-title">Welcome to Arrows</h1>
       </div>
       <div className="login-right">
         <div className="logo-wrapper">
         <img src={arrowLogo} alt="Arrow Logo" className="arrow-logo" />
         </div>
         <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label htmlFor="role">Login As</label>
-            <select
-              id="role"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              aria-label="Select login role"
-            >
-              <option value="recruiter">Recruiter</option>
-              <option value="accountManager">Account Manager</option>
-            </select>
-          </div>
           <div className="form-group email-group">
             <label htmlFor="email">Email Address</label>
             <div className="input-wrapper">
@@ -162,6 +313,18 @@ If you've forgotten your password, use the "Forgot Password" option<br></br> to 
               </button>
             </div>
           </div>
+          <div className="form-group">
+            <label htmlFor="role">Login As</label>
+            <select
+              id="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              aria-label="Select login role"
+            >
+              <option value="recruiter">Recruiter</option>
+              <option value="accountManager">Account Manager</option>
+            </select>
+          </div>
           <div className="form-options">
             <label className="remember-me">
               <input type="checkbox" /> Remember me
@@ -172,9 +335,9 @@ If you've forgotten your password, use the "Forgot Password" option<br></br> to 
           <button type="submit" className="login-btn" disabled={loading}>
             {loading ? 'Signing In...' : 'Sign In'}
           </button>
-          <p className="login-hint">
-            Recruiter: recruiter@method-hub.com / recruiter | Account Manager: accmanager@method-hub.com / accmanager
-          </p>
+          <button type="button" className="login-btn" onClick={handleSsoLogin} disabled={loading} style={{ display: 'none' }}>
+            Sign In With SSO
+          </button>
         </form>
       </div>
     </div>

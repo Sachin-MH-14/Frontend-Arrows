@@ -284,6 +284,78 @@
   color: #b91c1c;
 }
 
+.reusable-form-page.job-opening-form .job-jd-generator {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-textarea {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  border: 1px solid #d8e2ef;
+  border-radius: 10px;
+  padding: 12px;
+  font: inherit;
+  color: #111827;
+  background: #f8fbff;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-textarea:focus {
+  outline: none;
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-button {
+  border: none;
+  border-radius: 8px;
+  background: #3f90f6;
+  color: #fff;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 8px 14px rgba(63, 144, 246, 0.2);
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-button:hover:not(:disabled) {
+  background: #2f7be0;
+  box-shadow: 0 10px 18px rgba(63, 144, 246, 0.28);
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.reusable-form-page.job-opening-form .job-jd-generator-textarea--preview {
+  min-height: 220px;
+  background: #fff;
+}
+
 .reusable-form-page.job-opening-form .min-max-container {
   gap: 16px;
   align-items: stretch;

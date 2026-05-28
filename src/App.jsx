@@ -132,6 +132,7 @@ export default function App() {
           <Routes key={location.pathname}>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/sso/callback" element={<Login />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/job-openings" element={<JobOpenings />} />
             <Route path="/candidates" element={<Candidates />} />
